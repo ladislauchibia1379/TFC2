@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fazenda Kalivala - Painel Remoto</title>
+
+<!-- Biblioteca MQTT.js para ligar via WebSockets ao broker, directamente do navegador -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#f2f5f0;margin:0;padding:20px;color:#2c3e2c;}
+  .container{max-width:520px;margin:0 auto;}
+  h1{text-align:center;font-size:1.3em;color:#2e5d32;}
+  .status{text-align:center;font-size:0.85em;margin-bottom:14px;padding:6px;border-radius:6px;}
+  .status-ligado{background:#e8f5e9;color:#2e7d32;}
+  .status-desligado{background:#ffebee;color:#c62828;}
+  .card{background:#fff;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 2px 6px rgba(0,0,0,0.1);}
+  .valores{display:flex;justify-content:space-around;text-align:center;}
+  .valor{font-size:1.8em;font-weight:bold;}
+  .label{font-size:0.85em;color:#666;}
+  .dispositivo{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+  .estado{font-weight:bold;padding:4px 10px;border-radius:6px;color:#fff;}
+  .on{background:#2e7d32;}
+  .off{background:#b0bec5;}
+  button{padding:8px 14px;margin-left:6px;border:none;border-radius:6px;cursor:pointer;font-size:0.9em;color:#fff;}
+  .btn-on{background:#2e7d32;}
+  .btn-off{background:#c62828;}
+  .btn-auto{background:#1565c0;}
+  .modo{font-size:0.8em;color:#555;margin-top:4px;}
+  .config{font-size:0.75em;color:#888;text-align:center;margin-top:20px;}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Fazenda Kalivala &mdash; Painel Remoto</h1>
+  <div class="status status-desligado" id="statusConexao">A ligar ao broker...</div>
+
+  <div class="card">
+    <div class="valores">
+      <div>
+        <div class="valor" id="temp">--</div>
+        <div class="label">Temperatura (&deg;C)</div>
+      </div>
+      <div>
+        <div class="valor" id="hum">--</div>
+        <div class="label">Humidade (%)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="dispositivo">
+      <span>💡 Lâmpada (aquecimento)</span>
+      <span id="estadoLampada" class="estado off">--</span>
+    </div>
+    <div>
+      <button class="btn-on" onclick="enviarComando('lampada','on')">Ligar</button>
+      <button class="btn-off" onclick="enviarComando('lampada','off')">Desligar</button>
+      <button class="btn-auto" onclick="enviarComando('lampada','auto')">Automático</button>
+    </div>
+    <div class="modo" id="modoLampada">Modo: --</div>
+  </div>
+
+  <div class="card">
+    <div class="dispositivo">
+      <span>🌀 Ventilador</span>
+      <span id="estadoVentilador" class="estado off">--</span>
+    </div>
+    <div>
+      <button class="btn-on" onclick="enviarComando('ventilador','on')">Ligar</button>
+      <button class="btn-off" onclick="enviarComando('ventilador','off')">Desligar</button>
+      <button class="btn-auto" onclick="enviarComando('ventilador','auto')">Automático</button>
+    </div>
+    <div class="modo" id="modoVentilador">Modo: --</div>
+  </div>
+
+  <div class="config">
+    Prefixo de tópicos: <span id="prefixoAtual"></span><br>
+    (Este painel funciona em qualquer rede com internet — não precisa de estar
+    na mesma WiFi do ESP32.)
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// CONFIGURAÇÃO — TEM DE SER IGUAL À DEFINIDA NO CÓDIGO DO ESP32
+// ============================================================================
+const TOPICO_BASE = "kalivala_huambo_avicola_LADISLAU"; // <-- altera para o mesmo valor do ESP32
+
+// Ligação MQTT via WebSockets seguro (wss) ao broker público HiveMQ
+const BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+
+document.getElementById('prefixoAtual').innerText = TOPICO_BASE;
+
+const topicos = {
+  temperatura:      TOPICO_BASE + "/temperatura",
+  humidade:         TOPICO_BASE + "/humidade",
+  lampadaEstado:    TOPICO_BASE + "/lampada/estado",
+  lampadaComando:   TOPICO_BASE + "/lampada/comando",
+  lampadaModo:      TOPICO_BASE + "/lampada/modo",
+  ventiladorEstado: TOPICO_BASE + "/ventilador/estado",
+  ventiladorComando:TOPICO_BASE + "/ventilador/comando",
+  ventiladorModo:   TOPICO_BASE + "/ventilador/modo"
+};
+
+const statusEl = document.getElementById('statusConexao');
+const client = mqtt.connect(BROKER_URL);
+
+client.on('connect', () => {
+  statusEl.innerText = "Ligado ao broker ✓";
+  statusEl.className = "status status-ligado";
+
+  client.subscribe(topicos.temperatura);
+  client.subscribe(topicos.humidade);
+  client.subscribe(topicos.lampadaEstado);
+  client.subscribe(topicos.lampadaModo);
+  client.subscribe(topicos.ventiladorEstado);
+  client.subscribe(topicos.ventiladorModo);
+});
+
+client.on('reconnect', () => {
+  statusEl.innerText = "A reconectar...";
+  statusEl.className = "status status-desligado";
+});
+
+client.on('close', () => {
+  statusEl.innerText = "Desligado do broker";
+  statusEl.className = "status status-desligado";
+});
+
+client.on('message', (topic, payload) => {
+  const valor = payload.toString();
+
+  if (topic === topicos.temperatura) {
+    document.getElementById('temp').innerText = parseFloat(valor).toFixed(1);
+  }
+  else if (topic === topicos.humidade) {
+    document.getElementById('hum').innerText = parseFloat(valor).toFixed(1);
+  }
+  else if (topic === topicos.lampadaEstado) {
+    const el = document.getElementById('estadoLampada');
+    const ligado = (valor === "on");
+    el.innerText = ligado ? 'LIGADA' : 'DESLIGADA';
+    el.className = 'estado ' + (ligado ? 'on' : 'off');
+  }
+  else if (topic === topicos.lampadaModo) {
+    document.getElementById('modoLampada').innerText = 'Modo: ' + (valor === "auto" ? "Automático" : "Manual");
+  }
+  else if (topic === topicos.ventiladorEstado) {
+    const el = document.getElementById('estadoVentilador');
+    const ligado = (valor === "on");
+    el.innerText = ligado ? 'LIGADO' : 'DESLIGADO';
+    el.className = 'estado ' + (ligado ? 'on' : 'off');
+  }
+  else if (topic === topicos.ventiladorModo) {
+    document.getElementById('modoVentilador').innerText = 'Modo: ' + (valor === "auto" ? "Automático" : "Manual");
+  }
+});
+
+function enviarComando(dispositivo, acao) {
+  const topico = dispositivo === 'lampada' ? topicos.lampadaComando : topicos.ventiladorComando;
+  client.publish(topico, acao);
+}
+</script>
+</body>
+</html>
